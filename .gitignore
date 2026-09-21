@@ -8,5 +8,8 @@ projet1/
 # Classes compilées (générées automatiquement dans bin/)
 bin/
 
+# Jar de distribution (artefact de build, pas versionné)
+dist/
+
 # Fichiers système
 *.log

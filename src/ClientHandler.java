@@ -19,7 +19,6 @@ class ClientHandler extends Thread {
     private ObjectInputStream in;
     private ObjectOutputStream out;
     private String name; // pseudo du client (null tant que non authentifié)
-    private volatile boolean abandonne; // vrai si le pseudo a été repris ailleurs
 
     ClientHandler(Socket socket) {
         this.socket = socket;
@@ -58,7 +57,7 @@ class ClientHandler extends Thread {
         } catch (IOException | ClassNotFoundException e) {
             System.out.println("[-] Erreur avec " + name + " : " + e.getMessage());
         } finally {
-            if (name != null && !abandonne) {
+            if (name != null) {
                 ChatServer.clientsList().remove(name);
                 System.out.println("[-] « " + name + " » s'est déconnecté");
                 /* On prévient immédiatement les autres : son pseudo
@@ -67,12 +66,6 @@ class ClientHandler extends Thread {
             }
             closeAll();
         }
-    }
-
-    /** Ferme cette session (son pseudo vient d'être repris par une autre connexion). */
-    synchronized void reprendre() {
-        abandonne = true;
-        closeAll();
     }
 
     /** Attend un pseudo, valide l'unique et l'enregistre dans la liste. */
@@ -88,34 +81,38 @@ class ClientHandler extends Thread {
             if (candidate.length() < 2) {
                 send(new Message(Message.ERROR, "Serveur", null,
                         "Le pseudo doit contenir au moins 2 caractères."));
-            } else if (ChatServer.clientsList().containsKey(candidate)) {
-                /* Le pseudo existe déjà. Il s'agit presque toujours d'une
-                   reconnexion après un redémarrage : on reprend la session.
-                   L'ancienne connexion est fermée (elle reçoit un avertissement). */
-                ClientHandler ancien = ChatServer.clientsList().get(candidate);
-                ancien.send(new Message(Message.INFO, "Serveur", candidate,
-                        "Ta session a été remplacée par une nouvelle connexion."));
-                ChatServer.clientsList().remove(candidate, ancien);
-                ancien.reprendre();
-                name = candidate;
-                ChatServer.clientsList().put(name, this);
-                send(new Message(Message.REGISTER_OK, "Serveur", name, null));
-                System.out.println("[↻] « " + name + " » reprise (nouvelle connexion)");
-                ChatServer.deliverPending(name, this);
-                ChatServer.userListChanged(this);
-                return true;
-            } else {
-                name = candidate;
-                ChatServer.clientsList().put(name, this);
-                send(new Message(Message.REGISTER_OK, "Serveur", name, null));
-                System.out.println("[+] « " + name + " » est maintenant connecté");
-                /* On livre au passage les messages reçus pendant son absence. */
-                ChatServer.deliverPending(name, this);
-                /* On prévient les autres : le nouveau pseudo apparaît
-                   automatiquement dans leur liste. */
-                ChatServer.userListChanged(this);
-                return true;
+                continue;
             }
+
+            /* ★ Pseudo déjà pris : on envoie une vraie erreur au lieu de
+               voler la session. Deux machines ne peuvent pas porter le
+               même pseudo en même temps. */
+            ClientHandler ancien = ChatServer.clientsList().get(candidate);
+            if (ancien != null && !ancien.sockEstFermee()) {
+                send(new Message(Message.ERROR, "Serveur", candidate,
+                        "« " + candidate + " » est déjà utilisé par un autre "
+                        + "utilisateur connecté. Choisis un autre pseudo."));
+                continue;
+            }
+
+            /* Ancienne session morte (client fermé) : on la remplace
+               proprement, le pseudo redevient disponible. */
+            if (ancien != null) {
+                ChatServer.clientsList().remove(candidate, ancien);
+                System.out.println("[~] « " + candidate
+                        + " » libéré (session précédente fermée)");
+            }
+
+            name = candidate;
+            ChatServer.clientsList().put(name, this);
+            send(new Message(Message.REGISTER_OK, "Serveur", name, null));
+            System.out.println("[+] « " + name + " » est maintenant connecté");
+            /* On livre au passage les messages reçus pendant son absence. */
+            ChatServer.deliverPending(name, this);
+            /* On prévient les autres : le nouveau pseudo apparaît
+               automatiquement dans leur liste. */
+            ChatServer.userListChanged(this);
+            return true;
         }
     }
 
@@ -183,6 +180,11 @@ class ClientHandler extends Thread {
         try { if (in != null) in.close(); } catch (IOException ignored) {}
         try { if (out != null) out.close(); } catch (IOException ignored) {}
         try { socket.close(); } catch (IOException ignored) {}
+    }
+
+    /** Vrai si la connexion du client est réellement fermée (session morte). */
+    boolean sockEstFermee() {
+        return socket == null || socket.isClosed();
     }
 
     /** Nettoie un pseudo : lettres (accents compris), chiffres, _ et espaces. */

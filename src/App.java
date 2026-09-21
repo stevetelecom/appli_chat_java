@@ -30,6 +30,7 @@ public class App extends Application {
         stage.setTitle("ConnectChat - Chat local");
         stage.getIcons().addAll(Icons.list());
         stage.setScene(new Scene(new MainView(), 920, 660));
+        stage.setOnCloseRequest(e -> Session.fermer());
         stage.show();
     }
 

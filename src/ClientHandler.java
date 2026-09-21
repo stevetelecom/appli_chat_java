@@ -155,12 +155,15 @@ class ClientHandler extends Thread {
                 pending.add(m);
                 while (pending.size() > Message.MAX_INBOX) pending.remove(0);
             }
+            System.out.println("[⚑] " + name + " -> " + m.to
+                    + " : « " + m.content + " » (gardé, hors ligne)");
             send(new Message(Message.INFO, "Serveur", m.to,
                     "« " + m.to + " » est hors ligne. Ton message a été gardé, "
                     + "il sera délivré à sa prochaine connexion."));
             return;
         }
 
+        System.out.println("[✉] " + name + " -> " + m.to + " : « " + m.content + " »");
         dest.send(m);
     }
 

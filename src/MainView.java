@@ -40,7 +40,6 @@ public class MainView extends BorderPane {
     private final Label statusLabel = new Label("Tu n'es pas encore connecté.");
     private final TableView<String> table = new TableView<>();
     private final Button trouverButton = new Button("Trouver");
-    private boolean pendingList = false; // vraie si on attend la liste
 
     public MainView() {
         setStyle("-fx-background-color:" + Colors.BG + ";");
@@ -218,39 +217,48 @@ public class MainView extends BorderPane {
             case Message.REGISTER_OK:
                 Session.myName = m.to;
                 statusLabel.setText("Connecté au réseau sous le pseudo « " + m.to + " ».");
-                if (pendingList) {
-                    pendingList = false;
+                /* À chaque connexion (ou reconnexion), on repart sur une liste
+                   fraîche. Le bouton est réactivé ici, et pas seulement à
+                   l'arrivée de USER_LIST : il ne peut plus rester bloqué. */
+                trouverButton.setDisable(false);
+                if (Session.client != null && Session.client.isRunning()) {
                     Session.client.send(new Message(Message.REQUEST_LIST, m.to, null, null));
                 }
                 break;
 
             case Message.USER_LIST:
                 fillTable(m.content);
+                long nb = table.getItems().size();
+                statusLabel.setText(nb == 0
+                        ? "Personne n'est connecté pour le moment."
+                        : nb + " personne(s) connectée(s) sur le réseau.");
                 trouverButton.setDisable(false);
                 break;
 
             case Message.CHAT:
                 /* Un nouvel arrivant dans la conversation : on l'ajoute à
-                   l'historique du contact. S'il s'agit d'un INFO système
-                   commençant par "Serveur", c'est aussi bon de l'afficher. */
+                   l'historique du contact (et on le sauvegarde sur disque). */
                 Session.historyFor(m.from).add(m);
+                Session.sauver(m.from);
                 break;
 
             case Message.INFO:
                 if (m.to != null && !m.to.isEmpty()) {
                     Session.historyFor(m.to).add(m);
+                    Session.sauver(m.to);
                 }
                 break;
 
             case Message.ERROR:
                 statusLabel.setText(m.content);
+                trouverButton.setDisable(false);
                 if (m.to != null && !m.to.isEmpty()) {
                     /* Erreur liée à un contact précis : on l'affiche dans
                        la fenêtre de chat correspondante, si elle existe. */
                     Session.historyFor(m.to)
                             .add(new Message(Message.INFO, "Serveur", m.to, m.content));
+                    Session.sauver(m.to);
                 }
-                trouverButton.setDisable(false);
                 break;
 
             default:
@@ -269,8 +277,6 @@ public class MainView extends BorderPane {
         trouverButton.setDisable(true);
         statusLabel.setText("Connexion au serveur (" + App.HOST + ":" + App.PORT + ")...");
 
-        pendingList = true;
-
         /* La connexion réseau ne doit JAMAIS bloquer l'interface. */
         new Thread(() -> {
             try {
@@ -279,19 +285,17 @@ public class MainView extends BorderPane {
                     Session.client = new ChatClient(App.HOST, App.PORT, listener);
                 }
 
-                /* 2. On (re)enregistre le pseudo si nécessaire. */
-                if (Session.myName == null || !Session.myName.equals(name)) {
-                    Session.client.send(new Message(Message.REGISTER, name, null, name));
-                } else {
-                    /* Déjà connecté avec ce pseudo : on demande juste la liste. */
+                /* 2. Déjà enregistré avec ce pseudo ? juste une liste à jour.
+                   Sinon on (ré)enregistre : le serveur gère les reconnexions. */
+                if (Session.myName != null && Session.myName.equals(name)) {
                     Session.client.send(new Message(Message.REQUEST_LIST, name, null, null));
-                    pendingList = false;
+                } else {
+                    Session.client.send(new Message(Message.REGISTER, name, null, name));
                 }
             } catch (IOException e) {
                 Platform.runLater(() -> {
                     Session.client = null;
                     Session.myName = null;
-                    pendingList = false;
                     statusLabel.setText("Serveur injoignable sur " + App.HOST + ":"
                             + App.PORT + ". Démarre ChatServer puis réessaie.");
                     trouverButton.setDisable(false);

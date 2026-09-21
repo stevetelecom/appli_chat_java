@@ -1,6 +1,8 @@
 import java.io.IOException;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -17,6 +19,10 @@ public class ChatServer {
 
     /* Tableau des clients connectés : pseudo -> gestionnaire de connexion. */
     private static final Map<String, ClientHandler> clients = new ConcurrentHashMap<>();
+
+    /* Messages gardés pour les utilisateurs hors ligne : pseudo -> file d'attente.
+       Quand ils reviennent, tout est délivré d'un coup (comme WhatsApp). */
+    private static final Map<String, List<Message>> inbox = new ConcurrentHashMap<>();
 
     public static void main(String[] args) {
         int port = DEFAULT_PORT;
@@ -57,5 +63,37 @@ public class ChatServer {
     /** Rend la liste partagée accessible aux gestionnaires. */
     static Map<String, ClientHandler> clientsList() {
         return clients;
+    }
+
+    /** File d'attente des messages destinés à un pseudo actuellement hors ligne. */
+    static synchronized List<Message> inboxFor(String name) {
+        return inbox.computeIfAbsent(name, k -> new ArrayList<>());
+    }
+
+    /** Livre à un client venant de se reconnecter tous ses messages en attente. */
+    static void deliverPending(String name, ClientHandler handler) {
+        List<Message> pending = inbox.remove(name);
+        if (pending == null) return;
+        for (Message m : pending) {
+            handler.send(m);
+        }
+        System.out.println("[✉] " + pending.size()
+                + " message(s) en attente délivré(s) à « " + name + " »");
+    }
+
+    /**
+     * Pousse la liste fraîche à TOUS les clients encore connectés,
+     * sauf éventuellement "aExclure" (le client qui vient tout juste
+     * de s'ajouter : il recevra sa propre réponse après son REGISTER_OK).
+     * Appelé automatiquement quand un utilisateur arrive ou quitte le
+     * réseau : les autres voient tout de suite la liste se mettre à jour,
+     * sans avoir à recliquer sur « Trouver ».
+     */
+    static void userListChanged(ClientHandler aExclure) {
+        for (ClientHandler h : clients.values()) {
+            if (h != aExclure) {
+                h.sendUserList();
+            }
+        }
     }
 }

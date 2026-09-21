@@ -4,10 +4,13 @@ import javafx.collections.ObservableList;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.control.Button;
+import javafx.scene.control.ContextMenu;
 import javafx.scene.control.Label;
 import javafx.scene.control.ListCell;
 import javafx.scene.control.ListView;
+import javafx.scene.control.MenuItem;
 import javafx.scene.control.TextField;
+import javafx.scene.input.ContextMenuEvent;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
@@ -40,6 +43,9 @@ public class ChatView extends BorderPane {
     private final ObservableList<Message> history;
     private final ListView<Message> list = new ListView<>();
     private final TextField input = new TextField();
+    private final Label quoteLabel = new Label();
+    private final HBox quoteBar = new HBox(8);
+    private Message quoted; // message cité avant d'envoyer la réponse, ou null
 
     public ChatView(String contact) {
         this.contact = contact;
@@ -119,17 +125,27 @@ public class ChatView extends BorderPane {
 
                 boolean mine = Session.myName != null && Session.myName.equals(m.from);
 
-                Label bulle = new Label(m.content);
-                bulle.setWrapText(true);
+                /* La bulle : rouge à gauche (reçue), verte à droite (envoyée),
+                   exactement comme WhatsApp. */
+                VBox bulle = new VBox(4);
                 bulle.setMaxWidth(340);
                 bulle.setPadding(new Insets(9, 12, 9, 12));
-                bulle.setFont(Font.font("System", 13));
-                bulle.setTextFill(Color.web(Colors.TEXT));
                 bulle.setStyle(mine
                         ? "-fx-background-color:" + Colors.BUBBLE_SENT
                         + "; -fx-background-radius:16 16 4 16;"
                         : "-fx-background-color:" + Colors.WHITE
                         + "; -fx-background-radius:16 16 16 4;");
+
+                /* Si ce message citait quelqu'un, on affiche la citation au-dessus. */
+                if (m.quote != null) {
+                    bulle.getChildren().add(citation(m.quote));
+                }
+
+                Label texte = new Label(m.content);
+                texte.setWrapText(true);
+                texte.setFont(Font.font("System", 13));
+                texte.setTextFill(Color.web(Colors.TEXT));
+                bulle.getChildren().add(texte);
 
                 /* Petite ligne d'information (heure [+ auteur si reçu]). */
                 Label meta = new Label((mine ? "" : m.from + "  -  ")
@@ -139,6 +155,13 @@ public class ChatView extends BorderPane {
 
                 VBox cell = new VBox(2, bulle, meta);
                 cell.setAlignment(mine ? Pos.BOTTOM_RIGHT : Pos.BOTTOM_LEFT);
+
+                /* Clic droit sur une bulle : menu "Répondre" qui cite le message. */
+                ContextMenu menu = new ContextMenu();
+                MenuItem repondre = new MenuItem("Répondre à ce message");
+                repondre.setOnAction(e -> citer(m));
+                menu.getItems().add(repondre);
+                cell.setOnContextMenuRequested(e -> menu.show(cell, e.getScreenX(), e.getScreenY()));
 
                 /* Un espace flexible pousse la bulle à droite (envoyé) ou à gauche. */
                 Region spacer = new Region();
@@ -171,6 +194,23 @@ public class ChatView extends BorderPane {
         input.setOnAction(e -> send());
         sendButton.setOnAction(e -> send());
 
+        /* --- Barre de citation (apparaît quand on répond à un message) --- */
+        quoteLabel.setWrapText(true);
+        quoteLabel.setFont(Font.font("System", 11));
+        quoteLabel.setTextFill(Color.web(Colors.TEXT));
+
+        Button annuler = new Button("✕");
+        annuler.setStyle("-fx-background-color:transparent;"
+                + "-fx-text-fill:" + Colors.MUTED + ";"
+                + "-fx-font-weight:bold;"
+                + "-fx-cursor:hand;");
+        annuler.setOnAction(e -> effacerCitation());
+
+        quoteBar.getChildren().addAll(quoteLabel, annuler, reserve());
+        quoteBar.setPadding(new Insets(6, 16, 0, 16));
+        quoteBar.setStyle("-fx-background-color:" + Colors.BG + ";");
+        quoteBar.setVisible(false);
+
         HBox compose = new HBox(10, input, sendButton);
         HBox.setHgrow(input, Priority.ALWAYS);
         compose.setPadding(new Insets(10, 16, 10, 16));
@@ -183,7 +223,7 @@ public class ChatView extends BorderPane {
         signature.setPadding(new Insets(0, 16, 6, 16));
         signature.setStyle("-fx-background-color:" + Colors.BG + ";");
 
-        return new VBox(compose, signature);
+        return new VBox(quoteBar, compose, signature);
     }
 
     /** Fait défiler la liste jusqu'au dernier message. */
@@ -212,17 +252,72 @@ public class ChatView extends BorderPane {
         }
 
         Message m = new Message(Message.CHAT, Session.myName, contact, texte);
+        m.quote = quoted;
         Session.client.send(m);
 
         /* On affiche immédiatement la bulle côté expéditeur. */
         history.add(m);
+        Session.sauver(contact);
         input.clear();
+        effacerCitation();
         scrollToEnd();
     }
 
     /** Ajoute une note système au fil de la conversation. */
     private void addInfo(String texte) {
         history.add(new Message(Message.INFO, "Serveur", contact, texte));
+        Session.sauver(contact);
         scrollToEnd();
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*                        Citation d'un message                        */
+    /* ------------------------------------------------------------------ */
+
+    /** Sélectionne un message à citer (clic droit → "Répondre"). */
+    private void citer(Message m) {
+        quoted = m;
+        quoteLabel.setText("Répondre à « " + (m.from == null ? "?" : m.from)
+                + " : " + extrait(m.content, 70) + " »");
+        quoteBar.setVisible(true);
+        input.requestFocus();
+    }
+
+    /** Annule la citation en cours. */
+    private void effacerCitation() {
+        quoted = null;
+        quoteBar.setVisible(false);
+        quoteLabel.setText("");
+    }
+
+    /** Le bloc grisé affiché au-dessus du texte dans la bulle. */
+    private VBox citation(Message q) {
+        Label auteur = new Label("De " + (q.from == null ? "?" : q.from));
+        auteur.setFont(Font.font("System", FontWeight.BOLD, 11));
+        auteur.setTextFill(Color.web(Colors.TEAL_MED));
+
+        Label contenu = new Label(extrait(q.content, 120));
+        contenu.setWrapText(true);
+        contenu.setFont(Font.font("System", 11));
+        contenu.setStyle("-fx-font-style:italic; -fx-text-fill:#4B555C;");
+
+        VBox bloc = new VBox(1, auteur, contenu);
+        bloc.setStyle("-fx-background-color:rgba(0,0,0,0.07);"
+                + "-fx-background-radius:8;"
+                + "-fx-padding:6 8 6 8;");
+        return bloc;
+    }
+
+    /** Coupe un texte à une longueur raisonnable pour l'affichage. */
+    private static String extrait(String texte, int max) {
+        String t = Message.clean(texte);
+        return t.length() <= max ? t : t.substring(0, max) + "…";
+    }
+
+    /** Un espace élastique qui pousse le reste d'un HBox à droite. */
+    private Region reserve() {
+        Region spacere = new Region();
+        HBox.setHgrow(spacere, Priority.ALWAYS);
+        return spacere;
     }
 }

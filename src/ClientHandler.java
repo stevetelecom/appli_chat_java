@@ -4,6 +4,7 @@ import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.net.Socket;
 import java.net.SocketException;
+import java.util.List;
 
 /**
  * ClientHandler = le thread qui s'occupe d'UN client connecté.
@@ -18,10 +19,16 @@ class ClientHandler extends Thread {
     private ObjectInputStream in;
     private ObjectOutputStream out;
     private String name; // pseudo du client (null tant que non authentifié)
+    private volatile boolean abandonne; // vrai si le pseudo a été repris ailleurs
 
     ClientHandler(Socket socket) {
         this.socket = socket;
         setName("Client-" + socket.getPort());
+        try {
+            /* Détection plus réactive des coupures réseau. */
+            socket.setKeepAlive(true);
+        } catch (IOException ignored) {
+        }
     }
 
     @Override
@@ -33,8 +40,6 @@ class ClientHandler extends Thread {
 
             /* Étape 1 : le client doit choisir un pseudo valide. */
             if (!authenticate()) return;
-
-            System.out.println("[+] « " + name + " » est maintenant connecté");
 
             /* Étape 2 : on ne fait plus que transporter les demandes. */
             while (true) {
@@ -53,12 +58,21 @@ class ClientHandler extends Thread {
         } catch (IOException | ClassNotFoundException e) {
             System.out.println("[-] Erreur avec " + name + " : " + e.getMessage());
         } finally {
-            if (name != null) {
+            if (name != null && !abandonne) {
                 ChatServer.clientsList().remove(name);
                 System.out.println("[-] « " + name + " » s'est déconnecté");
+                /* On prévient immédiatement les autres : son pseudo
+                   disparaît de leur liste sans qu'ils fassent rien. */
+                ChatServer.userListChanged(null);
             }
             closeAll();
         }
+    }
+
+    /** Ferme cette session (son pseudo vient d'être repris par une autre connexion). */
+    synchronized void reprendre() {
+        abandonne = true;
+        closeAll();
     }
 
     /** Attend un pseudo, valide l'unique et l'enregistre dans la liste. */
@@ -75,19 +89,38 @@ class ClientHandler extends Thread {
                 send(new Message(Message.ERROR, "Serveur", null,
                         "Le pseudo doit contenir au moins 2 caractères."));
             } else if (ChatServer.clientsList().containsKey(candidate)) {
-                send(new Message(Message.ERROR, "Serveur", null,
-                        "Ce pseudo est déjà utilisé par un autre utilisateur."));
+                /* Le pseudo existe déjà. Il s'agit presque toujours d'une
+                   reconnexion après un redémarrage : on reprend la session.
+                   L'ancienne connexion est fermée (elle reçoit un avertissement). */
+                ClientHandler ancien = ChatServer.clientsList().get(candidate);
+                ancien.send(new Message(Message.INFO, "Serveur", candidate,
+                        "Ta session a été remplacée par une nouvelle connexion."));
+                ChatServer.clientsList().remove(candidate, ancien);
+                ancien.reprendre();
+                name = candidate;
+                ChatServer.clientsList().put(name, this);
+                send(new Message(Message.REGISTER_OK, "Serveur", name, null));
+                System.out.println("[↻] « " + name + " » reprise (nouvelle connexion)");
+                ChatServer.deliverPending(name, this);
+                ChatServer.userListChanged(this);
+                return true;
             } else {
                 name = candidate;
                 ChatServer.clientsList().put(name, this);
                 send(new Message(Message.REGISTER_OK, "Serveur", name, null));
+                System.out.println("[+] « " + name + " » est maintenant connecté");
+                /* On livre au passage les messages reçus pendant son absence. */
+                ChatServer.deliverPending(name, this);
+                /* On prévient les autres : le nouveau pseudo apparaît
+                   automatiquement dans leur liste. */
+                ChatServer.userListChanged(this);
                 return true;
             }
         }
     }
 
     /** Renvoie au client la liste des utilisateurs connectés (sauf lui-même). */
-    private void sendUserList() {
+    void sendUserList() {
         StringBuilder sb = new StringBuilder();
         boolean first = true;
         for (String who : ChatServer.clientsList().keySet()) {
@@ -101,24 +134,38 @@ class ClientHandler extends Thread {
 
     /** Relaie un message privé vers le destinataire indiqué. */
     private void relay(Message m) {
-        ClientHandler dest = ChatServer.clientsList().get(m.to);
-
-        if (dest == null || dest == this) {
-            /* Destinataire introuvable : on prévient l'expéditeur. */
-            send(new Message(Message.ERROR, "Serveur", m.to,
-                    "« " + m.to + " » n'est pas connecté en ce moment."));
-            return;
-        }
-
         /* On nettoie le contenu ET on force l'expéditeur :
            personne ne peut usurper l'identité d'un autre. */
         m.content = Message.clean(m.content);
         m.from = name;
+
+        ClientHandler dest = ChatServer.clientsList().get(m.to);
+
+        if (dest == this) {
+            send(new Message(Message.ERROR, "Serveur", m.to,
+                    "Tu ne peux pas t'envoyer un message à toi-même."));
+            return;
+        }
+
+        if (dest == null) {
+            /* Destinataire hors ligne : on GARDE le message et on prévient
+               l'expéditeur au lieu de le perdre silencieusement. */
+            List<Message> pending = ChatServer.inboxFor(m.to);
+            synchronized (pending) {
+                pending.add(m);
+                while (pending.size() > Message.MAX_INBOX) pending.remove(0);
+            }
+            send(new Message(Message.INFO, "Serveur", m.to,
+                    "« " + m.to + " » est hors ligne. Ton message a été gardé, "
+                    + "il sera délivré à sa prochaine connexion."));
+            return;
+        }
+
         dest.send(m);
     }
 
     /** Envoi sécurisé d'un paquet (synchronisé sur le flux de sortie). */
-    private void send(Message m) {
+    void send(Message m) {
         try {
             synchronized (out) {
                 out.writeObject(m);

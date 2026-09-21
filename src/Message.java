@@ -22,11 +22,15 @@ public class Message implements Serializable {
     /* Taille maximale d'un message de discussion (limite anti-abus) */
     public static final int MAX_CONTENT = 2000;
 
+    /* Nombre maximal de messages gardés en attente pour un destinataire hors ligne */
+    public static final int MAX_INBOX = 200;
+
     public String type;     // une des constantes ci-dessus
     public String from;     // pseudo de l'expéditeur
     public String to;       // pseudo du destinataire (ou null)
     public String content;  // le texte utile (pseudo, liste, message…)
     public long time;       // horodatage en millisecondes
+    public Message quote;   // message cité (réponse façon WhatsApp), ou null
 
     /** Constructeur simple pour créer un paquet à envoyer. */
     public Message(String type, String from, String to, String content) {

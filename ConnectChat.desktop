@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=ConnectChat
+GenericName=Messagerie locale
+Comment=Chat de messagerie en Java (Sockets + JavaFX)
+Exec=/home/leroisdejesus/appli_chat_java/launch.sh
+Icon=/home/leroisdejesus/appli_chat_java/connectchat_logo_64.png
+Terminal=false
+StartupNotify=true
+StartupWMClass=App
+Categories=Network;InstantMessaging;
+Keywords=chat;message;messagerie;java;conversation;

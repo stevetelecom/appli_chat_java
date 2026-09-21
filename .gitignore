@@ -1,0 +1,12 @@
+# Environnements et IDE
+.idea/
+.vscode/
+*.iml
+.kilo/
+projet1/
+
+# Classes compilées (générées automatiquement dans bin/)
+bin/
+
+# Fichiers système
+*.log

@@ -116,12 +116,15 @@ class ClientHandler extends Thread {
         }
     }
 
-    /** Renvoie au client la liste des utilisateurs connectés (sauf lui-même). */
+    /**
+     * Renvoie au client la liste des utilisateurs connectés, LUI-MÊME inclus
+     * (exigence du professeur : on voit son pseudo apparaître dans la liste
+     * et on peut s'écrire à soi-même, comme sur WhatsApp).
+     */
     void sendUserList() {
         StringBuilder sb = new StringBuilder();
         boolean first = true;
         for (String who : ChatServer.clientsList().keySet()) {
-            if (who.equals(name)) continue; // on ne se liste pas soi-même
             if (!first) sb.append("\n");
             sb.append(who);
             first = false;
@@ -139,8 +142,11 @@ class ClientHandler extends Thread {
         ClientHandler dest = ChatServer.clientsList().get(m.to);
 
         if (dest == this) {
-            send(new Message(Message.ERROR, "Serveur", m.to,
-                    "Tu ne peux pas t'envoyer un message à toi-même."));
+            /* On s'écrit à soi-même : inutile de renvoyer le message,
+               l'expéditeur l'affiche déjà chez lui. C'est notre façon
+               de faire « Message à soi-même » façon WhatsApp. */
+            System.out.println("[▲] " + name + " -> " + m.to
+                    + " : « " + m.content + " » (à soi-même)");
             return;
         }
 
